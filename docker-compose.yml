@@ -1,6 +1,18 @@
-version: '3'
+version: "3"
 services:
   book-club:
     build: .
     environment:
       - BOOKCLUB_BOTTOKEN
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - /home/soljarka/bookclub/data:/data/db
+  gui:
+    image: mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongodb
