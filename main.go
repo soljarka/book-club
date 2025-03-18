@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -160,10 +159,8 @@ func registerBookHandler(ctx context.Context, b *bot.Bot, update *models.Update)
 func listHostsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := "Участники:"
 
-	counter := 1
-	for _, host := range bookClub.GetHosts() {
-		message += fmt.Sprintf("\n%d. %s", counter, host.Username)
-		counter++
+	for i, host := range bookClub.GetHosts() {
+		message += fmt.Sprintf("\n%d. %s", i+1, host.Username)
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -175,10 +172,8 @@ func listHostsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 func listBooksHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := "Книги:"
 
-	counter := 1
-	for _, book := range bookClub.GetBooks() {
-		message += fmt.Sprintf("\n%d. %s - %s", counter, book.Author, book.Title)
-		counter++
+	for i, book := range bookClub.GetBooks() {
+		message += fmt.Sprintf("\n%d. %s - %s", i+1, book.Author, book.Title)
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -197,16 +192,7 @@ func deleteBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		return
 	}
 
-	bookId, err := bookIndexToId(bookIndex)
-	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Книга не найдена.",
-		})
-		return
-	}
-
-	err = bookClub.DeleteBook(bookId)
+	err = bookClub.DeleteBook(bookIndex)
 
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
@@ -241,16 +227,13 @@ func setNextBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) 
 		return
 	}
 
-	bookId, err := bookIndexToId(bookIndex)
+	err = bookClub.SetNextBook(update.Message.From.ID, bookIndex-1)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "Книга не найдена.",
 		})
-		return
 	}
-
-	bookClub.SetNextBook(update.Message.From.ID, bookId)
 
 	err = bookClub.Save()
 	if err != nil {
@@ -265,28 +248,6 @@ func setNextBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) 
 		ChatID: update.Message.Chat.ID,
 		Text:   "Готово!",
 	})
-}
-
-func bookIndexToId(bookIndex int) (string, error) {
-	count := 0
-	for _, book := range bookClub.GetBooks() {
-		if count == bookIndex-1 {
-			return book.Id, nil
-		}
-		count++
-	}
-	return "", errors.New("Книга не найдена.")
-}
-
-func hostIndexToId(hostIndex int) (int64, error) {
-	count := 0
-	for _, host := range bookClub.GetHosts() {
-		if count == hostIndex-1 {
-			return host.TelegramId, nil
-		}
-		count++
-	}
-	return 0, errors.New("Участник не найден.")
 }
 
 func nextNthSessionHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -306,7 +267,7 @@ func nextNthSessionHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 	}
 
 	nextBookId := session.Host.NextBookId
-	book := bookClub.GetBook(nextBookId)
+	book := bookClub.GetBookById(nextBookId)
 	message := fmt.Sprintf("Ближайшее %d-е собрание клуба: %s, ведущий: %s", n, session.Date.Format("01/02/2006"), session.Host.Username)
 	if nextBookId != "" {
 		message += fmt.Sprintf(", книга: %s - %s", book.Title, book.Author)
@@ -333,8 +294,9 @@ func setQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			return
 		}
 
-		telegramId, err := hostIndexToId(index)
-		if err != nil {
+		host := bookClub.GetHosts()[index-1]
+
+		if host == nil {
 			b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID: update.Message.Chat.ID,
 				Text:   "Участник не найден.",
@@ -342,7 +304,7 @@ func setQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			return
 		}
 
-		telegramIds = append(telegramIds, telegramId)
+		telegramIds = append(telegramIds, host.TelegramId)
 	}
 
 	err := bookClub.SetQueue(telegramIds)
@@ -383,7 +345,8 @@ func nextSessionHandler(ctx context.Context, b *bot.Bot, update *models.Update) 
 	nextBookId := session.Host.NextBookId
 	message := fmt.Sprintf("Cледующее собрание клуба: %s, ведущий: %s", session.Date.Format("01/02/2006"), session.Host.Username)
 	if nextBookId != "" {
-		message += fmt.Sprintf(", книга: %s", bookClub.GetBook(nextBookId).Title)
+		book := bookClub.GetBookById(nextBookId)
+		message += fmt.Sprintf(", книга: %s - %s", book.Author, book.Title)
 	}
 	message += "."
 

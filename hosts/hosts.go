@@ -2,6 +2,7 @@ package hosts
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,22 +26,43 @@ type Session struct {
 }
 
 type Bookclub struct {
-	ChatId              int64            `bson:"_id,omitempty"`
-	Hosts               map[int64]*Host  `bson:"hosts"`
-	Queue               []int64          `bson:"queue"`
-	Books               map[string]*Book `bson:"books"`
-	StartHostQueueIndex int              `bson:"startHostQueueIndex"`
-	StartTime           time.Time        `bson:"startTime"`
+	ChatId              int64   `bson:"_id,omitempty"`
+	Hosts               []*Host `bson:"hosts"`
+	hostMap             map[int64]*Host
+	Queue               []int64 `bson:"queue"`
+	Books               []*Book `bson:"books"`
+	bookMap             map[string]*Book
+	StartHostQueueIndex int       `bson:"startHostQueueIndex"`
+	StartTime           time.Time `bson:"startTime"`
 }
 
 func LoadBookclub(chatId int64) (*Bookclub, error) {
+	fmt.Println("Loading bookclub.")
 	bookClub, err := loadBookclub(chatId)
+	fmt.Println("Bookclub loaded: ", bookClub)
 	if err != nil {
+		fmt.Println("Bookclub not found. Creating new bookclub.")
 		bookClub = newBookclub(chatId)
 		err = insertBookclub(bookClub)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if bookClub.hostMap == nil {
+		bookClub.hostMap = make(map[int64]*Host)
+	}
+
+	if bookClub.bookMap == nil {
+		bookClub.bookMap = make(map[string]*Book)
+	}
+
+	for _, host := range bookClub.Hosts {
+		bookClub.hostMap[host.TelegramId] = host
+	}
+
+	for _, book := range bookClub.Books {
+		bookClub.bookMap[book.Id] = book
 	}
 
 	return bookClub, nil
@@ -53,41 +75,60 @@ func (bookclub *Bookclub) Save() error {
 func newBookclub(chatId int64) *Bookclub {
 	return &Bookclub{
 		ChatId:              chatId,
-		Hosts:               make(map[int64]*Host),
+		Hosts:               make([]*Host, 0),
+		hostMap:             make(map[int64]*Host),
 		Queue:               make([]int64, 0),
-		Books:               make(map[string]*Book),
+		Books:               make([]*Book, 0),
+		bookMap:             make(map[string]*Book),
 		StartHostQueueIndex: 0,
 		StartTime:           time.Now(),
 	}
 }
 
 func (b *Bookclub) AddHost(telegramId int64, username string) error {
-	if b.Hosts[telegramId] != nil {
+	if b.hostMap[telegramId] != nil {
 		return errors.New("Host already exists.")
 	}
-	b.Hosts[telegramId] = &Host{TelegramId: telegramId, Username: username}
+
+	host := &Host{TelegramId: telegramId, Username: username}
+
+	b.Hosts = append(b.Hosts, host)
+	b.hostMap[telegramId] = host
+
 	return nil
 }
 
 func (b *Bookclub) RemoveHost(telegramId int64) error {
-	if b.Hosts[telegramId] == nil {
+	toDelete := b.hostMap[telegramId]
+
+	if toDelete == nil {
 		return errors.New("Host does not exist.")
 	}
-	delete(b.Hosts, telegramId)
+
+	delete(b.hostMap, toDelete.TelegramId)
+
+	for i, host := range b.Hosts {
+		if host == toDelete {
+			b.Hosts = remove(b.Hosts, i)
+			break
+		}
+	}
+
 	return nil
 }
 
-func (b *Bookclub) SetNextBook(telegramId int64, bookId string) error {
-	if b.Books[bookId] == nil {
+func (b *Bookclub) SetNextBook(telegramId int64, bookIndex int) error {
+	book := b.Books[bookIndex]
+	if book == nil {
 		return errors.New("Book does not exist.")
 	}
-	b.Hosts[telegramId].NextBookId = bookId
+	b.hostMap[telegramId].NextBookId = book.Id
 	return nil
 }
 
 func (b *Bookclub) SetQueue(telegramIds []int64) error {
 	for _, id := range telegramIds {
-		if b.Hosts[id] == nil {
+		if b.hostMap[id] == nil {
 			return errors.New("One or more hosts do not exist.")
 		}
 	}
@@ -113,26 +154,34 @@ func (b *Bookclub) SetStartHost(telegramId int64) error {
 
 func (b *Bookclub) AddBook(author string, title string) {
 	uuid := uuid.New().String()
-	b.Books[uuid] = &Book{Id: uuid, Author: author, Title: title}
+	book := &Book{Id: uuid, Author: author, Title: title}
+	b.Books = append(b.Books, book)
+	b.bookMap[uuid] = book
 }
 
-func (b *Bookclub) GetBook(bookId string) *Book {
-	return b.Books[bookId]
+func (b *Bookclub) GetBookByIndex(bookIndex int) *Book {
+	return b.Books[bookIndex]
 }
 
-func (b *Bookclub) GetBooks() map[string]*Book {
+func (b *Bookclub) GetBookById(bookId string) *Book {
+	return b.bookMap[bookId]
+}
+
+func (b *Bookclub) GetBooks() []*Book {
 	return b.Books
 }
 
-func (b *Bookclub) GetHosts() map[int64]*Host {
+func (b *Bookclub) GetHosts() []*Host {
 	return b.Hosts
 }
 
-func (b *Bookclub) DeleteBook(bookId string) error {
-	if b.Books[bookId] == nil {
+func (b *Bookclub) DeleteBook(bookIndex int) error {
+	book := b.Books[bookIndex]
+	if book == nil {
 		return errors.New("Book does not exist.")
 	}
-	delete(b.Books, bookId)
+	b.Books = remove(b.Books, bookIndex)
+	delete(b.bookMap, book.Id)
 	return nil
 }
 
@@ -149,7 +198,7 @@ func (b *Bookclub) GetNthSession(n int) (*Session, error) {
 
 	nextDate = nextDate.AddDate(0, 0, -1)
 	queueIndex := (monthDiff(b.StartTime, nextDate) + b.StartHostQueueIndex) % len(b.Queue)
-	host := b.Hosts[b.Queue[queueIndex]]
+	host := b.hostMap[b.Queue[queueIndex]]
 
 	return &Session{
 		Host: host,
@@ -175,4 +224,8 @@ func isSecondTuesday(t time.Time) bool {
 		return true
 	}
 	return false
+}
+
+func remove[T any](slice []T, s int) []T {
+	return append(slice[:s], slice[s+1:]...)
 }
