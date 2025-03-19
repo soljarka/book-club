@@ -16,8 +16,6 @@ import (
 	"github.com/soljarka/book-club/hosts"
 )
 
-var bookClub *hosts.Bookclub
-
 func main() {
 	var c config.Config
 	err := envconfig.Process("bookclub", &c)
@@ -34,7 +32,6 @@ func main() {
 		panic(err)
 	}
 
-	b.RegisterHandlerMatchFunc(startHandlerMatchFunc, startHandler)
 	b.RegisterHandlerMatchFunc(helpHandlerMatchFunc, helpHandler)
 	b.RegisterHandlerMatchFunc(nextSessionMatchFunc, nextSessionHandler)
 	b.RegisterHandlerMatchFunc(nextNthSessionMatchFunc, nextNthSessionHandler)
@@ -51,12 +48,18 @@ func main() {
 	b.Start(ctx)
 }
 
+func loadBookclub(ctx context.Context, b *bot.Bot, update *models.Update) *hosts.Bookclub {
+	bookClub, err := hosts.LoadBookclub(update.Message.Chat.ID)
+	if err != nil {
+		handleError(ctx, b, update, "He удалось загрузить клуб.", err)
+		return nil
+	}
+	return bookClub
+}
+
 func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text: `Доступные команды:
+	sendMessage(ctx, b, update, `Доступные команды:
 /help - Показать список доступных команд.
-/start - Начать работу с ботом.
 /next - Показать информацию о следующем собрании клуба.
 /next <n> - Показать информацию о n-ом собрании клуба.
 /register - Зарегистрировать себя как участника.
@@ -67,72 +70,53 @@ func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 /delete_book <номер книги> - Удалить книгу из списка.
 /my_next_book <номер книги> - Установить следующую книгу для чтения.
 /set_queue <номера участников через запятую> - Установить очередь ведущих.
-/get_queue - Показать очередь ведущих.`,
-	})
-}
-
-func startHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	club, err := hosts.LoadBookclub(update.Message.Chat.ID)
-	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Не удалось загрузить данные.",
-		})
-		return
-	}
-
-	bookClub = club
-
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   "Привет! Я бот книжного клуба.",
-	})
+/get_queue - Показать очередь ведущих.`)
 }
 
 func registerHostHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	bookClub.AddHost(update.Message.From.ID, update.Message.From.Username)
 
 	err := bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   fmt.Sprintf("Готово!"),
-	})
+	sendMessage(ctx, b, update, "Готово!")
 }
 
 func deregisterHostHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	bookClub.RemoveHost(update.Message.From.ID)
 
 	err := bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   fmt.Sprintf("Готово!"),
-	})
+	sendMessage(ctx, b, update, "Готово!")
 }
 
 func registerBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	bookDescription := strings.TrimPrefix(update.Message.Text, "/book ")
 	bookDetails := strings.SplitN(bookDescription, "/", 2)
 	if len(bookDetails) != 2 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Неверный формат. Пожалуйста, используйте формат 'author/title'.",
-		})
+		sendMessage(ctx, b, update, "Неверный формат. Пожалуйста, используйте формат '/book <автор>/<название книги>'.")
 		return
 	}
 
@@ -143,114 +127,105 @@ func registerBookHandler(ctx context.Context, b *bot.Bot, update *models.Update)
 
 	err := bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   fmt.Sprintf("Готово!"),
-	})
+	sendMessage(ctx, b, update, "Готово!")
+	listBooksHandler(ctx, b, update)
 }
 
 func listHostsHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	message := "Участники:"
 
 	for i, host := range bookClub.GetHosts() {
 		message += fmt.Sprintf("\n%d. %s", i+1, host.Username)
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   message,
-	})
+	sendMessage(ctx, b, update, message)
 }
 
 func listBooksHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	message := "Книги:"
-
-	for i, book := range bookClub.GetBooks() {
-		message += fmt.Sprintf("\n%d. %s - %s", i+1, book.Author, book.Title)
-	}
-
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   message,
-	})
-}
-
-func deleteBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	bookIndex, err := strconv.Atoi(strings.TrimPrefix(update.Message.Text, "/delete_book "))
-	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Неверный формат. Пожалуйста, используйте формат '/delete_book <номер книги>'.",
-		})
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
 		return
 	}
 
-	err = bookClub.DeleteBook(bookIndex)
+	message := "Книги:"
+
+	for i, book := range bookClub.GetBooks() {
+		message += fmt.Sprintf("\n%d. %s - «%s»", i+1, book.Author, book.Title)
+	}
+
+	sendMessage(ctx, b, update, message)
+}
+
+func deleteBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
+	bookIndex, err := strconv.Atoi(strings.TrimPrefix(update.Message.Text, "/delete_book "))
+	if err != nil {
+		sendMessage(ctx, b, update, "Неверный формат. Пожалуйста, используйте формат '/delete_book <номер книги>'.")
+		return
+	}
+
+	err = bookClub.DeleteBook(bookIndex - 1)
 
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Книга не найдена.",
-		})
+		sendMessage(ctx, b, update, "Книга не найдена.")
 		return
 	}
 
 	err = bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   "Готово!",
-	})
+	sendMessage(ctx, b, update, "Готово!")
 }
 
 func setNextBookHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	bookIndex, err := strconv.Atoi(strings.TrimPrefix(update.Message.Text, "/my_next_book "))
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Неверный формат. Пожалуйста, используйте формат '/my_next_book <номер книги>'.",
-		})
+		sendMessage(ctx, b, update, "Неверный формат. Пожалуйста, используйте формат '/my_next_book <номер книги>'.")
 		return
 	}
 
 	err = bookClub.SetNextBook(update.Message.From.ID, bookIndex-1)
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Книга не найдена.",
-		})
+		sendMessage(ctx, b, update, "Книга не найдена.")
+		return
 	}
 
 	err = bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   "Готово!",
-	})
+	sendMessage(ctx, b, update, "Готово!")
 }
 
 func nextNthSessionHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	n, err := strconv.Atoi(strings.TrimPrefix(update.Message.Text, "/next "))
 
 	if err != nil {
@@ -259,10 +234,7 @@ func nextNthSessionHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 
 	session, err := bookClub.GetNthSession(n)
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "В очередь не добавлен ни один участник.",
-		})
+		sendMessage(ctx, b, update, "В очередь не добавлен ни один участник.")
 		return
 	}
 
@@ -270,37 +242,33 @@ func nextNthSessionHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 	book := bookClub.GetBookById(nextBookId)
 	message := fmt.Sprintf("Ближайшее %d-е собрание клуба: %s, ведущий: %s", n, session.Date.Format("01/02/2006"), session.Host.Username)
 	if nextBookId != "" {
-		message += fmt.Sprintf(", книга: %s - %s", book.Title, book.Author)
+		message += fmt.Sprintf(", книга: %s - «%s»", book.Title, book.Author)
 	}
 	message += "."
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   message,
-	})
+	sendMessage(ctx, b, update, message)
 }
 
 func setQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	hostIndexes := strings.Split(strings.TrimPrefix(update.Message.Text, "/set_queue "), ",")
 	telegramIds := []int64{}
 
 	for _, hostIndex := range hostIndexes {
 		index, err := strconv.Atoi(strings.TrimSpace(hostIndex))
 		if err != nil {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "Неверный формат. Пожалуйста, используйте формат '/set_queue <номера участников через запятую>'.",
-			})
+			sendMessage(ctx, b, update, "Неверный формат. Пожалуйста, используйте формат '/set_queue <номера участников через запятую>'.")
 			return
 		}
 
 		host := bookClub.GetHosts()[index-1]
 
 		if host == nil {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "Участник не найден.",
-			})
+			sendMessage(ctx, b, update, "Участник не найден.")
 			return
 		}
 
@@ -310,35 +278,28 @@ func setQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	err := bookClub.SetQueue(telegramIds)
 
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Один или несколько участников не найдены.",
-		})
+		sendMessage(ctx, b, update, "Один или несколько участников не найдены.")
 		return
 	}
 
 	err = bookClub.Save()
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("He удалось сохранить."),
-		})
+		handleError(ctx, b, update, "He удалось сохранить.", err)
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   "Готово!",
-	})
+	sendMessage(ctx, b, update, "Готово!")
 }
 
 func nextSessionHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	session, err := bookClub.GetNthSession(1)
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "В очередь не добавлен ни один участник.",
-		})
+		sendMessage(ctx, b, update, "В очередь не добавлен ни один участник.")
 		return
 	}
 
@@ -346,17 +307,19 @@ func nextSessionHandler(ctx context.Context, b *bot.Bot, update *models.Update) 
 	message := fmt.Sprintf("Cледующее собрание клуба: %s, ведущий: %s", session.Date.Format("01/02/2006"), session.Host.Username)
 	if nextBookId != "" {
 		book := bookClub.GetBookById(nextBookId)
-		message += fmt.Sprintf(", книга: %s - %s", book.Author, book.Title)
+		message += fmt.Sprintf(", книга: %s - «%s»", book.Author, book.Title)
 	}
 	message += "."
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   message,
-	})
+	sendMessage(ctx, b, update, message)
 }
 
 func getQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bookClub := loadBookclub(ctx, b, update)
+	if bookClub == nil {
+		return
+	}
+
 	message := "Очередь ведущих:"
 
 	hosts := bookClub.GetHosts()
@@ -365,17 +328,7 @@ func getQueueHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		message += fmt.Sprintf("\n%s", hosts[telegramId].Username)
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   message,
-	})
-}
-
-func startHandlerMatchFunc(update *models.Update) bool {
-	if update.Message == nil {
-		return false
-	}
-	return update.Message.Text == "/start"
+	sendMessage(ctx, b, update, message)
 }
 
 func helpHandlerMatchFunc(update *models.Update) bool {
@@ -460,4 +413,16 @@ func getQueueHandlerMatchFunc(update *models.Update) bool {
 		return false
 	}
 	return update.Message.Text == "/get_queue"
+}
+
+func handleError(ctx context.Context, b *bot.Bot, update *models.Update, text string, err error) {
+	fmt.Println(err)
+	sendMessage(ctx, b, update, text)
+}
+
+func sendMessage(ctx context.Context, b *bot.Bot, update *models.Update, text string) {
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   text,
+	})
 }

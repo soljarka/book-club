@@ -180,6 +180,13 @@ func (b *Bookclub) DeleteBook(bookIndex int) error {
 	if book == nil {
 		return errors.New("Book does not exist.")
 	}
+
+	for _, host := range b.Hosts {
+		if host.NextBookId == book.Id {
+			host.NextBookId = ""
+		}
+	}
+
 	b.Books = remove(b.Books, bookIndex)
 	delete(b.bookMap, book.Id)
 	return nil
