@@ -1,6 +1,10 @@
 # Book Club
 Telegram bot for book clubs.
 
+## Disclaimers
+- Currently only supports Russian language.
+- Gatherings can only happen on the 2nd Tuesday of every Month.
+
 
 # Usage
 ```
